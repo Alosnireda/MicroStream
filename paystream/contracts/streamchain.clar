@@ -113,3 +113,85 @@
           ;; Increment channel ID
           (var-set next-channel-id (+ channel-id u1))
           (ok channel-id)))
+
+(define-public (propose-update
+    (channel-id uint)
+    (nonce uint)
+    (viewer-balance uint)
+    (creator-balance uint)
+    (signature (buff 65)))
+  (let
+    ((channel (unwrap! (get-channel channel-id) ERR-CHANNEL-NOT-FOUND))
+     (sender tx-sender))
+
+    ;; Validate signature
+    (asserts! (is-valid-signature signature) ERR-INVALID-SIG)
+
+    ;; Validate nonce
+    (asserts! (is-valid-nonce channel-id nonce) ERR-INVALID-NONCE)
+
+    ;; Verify channel is active
+    (asserts! (get is-active channel) ERR-CHANNEL-CLOSED)
+
+    ;; Verify balances match total deposit
+    (asserts! (is-eq (+ viewer-balance creator-balance) 
+                     (get total-deposit channel)) ERR-INVALID-AMOUNT)
+
+    ;; Store proposed state with signature
+    (map-set channel-states
+      { channel-id: channel-id, nonce: nonce }
+      {
+        viewer-balance: viewer-balance,
+        creator-balance: creator-balance,
+        viewer-sig: (if (is-eq sender (get viewer channel)) 
+                     (some signature)
+                     none),
+        creator-sig: (if (is-eq sender (get creator channel))
+                     (some signature)
+                     none)
+      })
+    (ok true)))
+
+(define-public (accept-update
+    (channel-id uint)
+    (nonce uint)
+    (signature (buff 65)))
+  (let
+    ((channel (unwrap! (get-channel channel-id) ERR-CHANNEL-NOT-FOUND))
+     (state (unwrap! (get-channel-state channel-id nonce) ERR-INVALID-STATE))
+     (sender tx-sender))
+
+    ;; Validate signature and nonce
+    (asserts! (is-valid-signature signature) ERR-INVALID-SIG)
+    (asserts! (is-valid-nonce channel-id nonce) ERR-INVALID-NONCE)
+
+    ;; Verify channel is active
+    (asserts! (get is-active channel) ERR-CHANNEL-CLOSED)
+
+    ;; Update signatures based on sender
+    (if (is-eq sender (get viewer channel))
+      (map-set channel-states
+        { channel-id: channel-id, nonce: nonce }
+        (merge state { viewer-sig: (some signature) }))
+      (map-set channel-states
+        { channel-id: channel-id, nonce: nonce }
+        (merge state { creator-sig: (some signature) })))
+
+    ;; Check if both signatures are present
+    (let ((updated-state (unwrap! (get-channel-state channel-id nonce) ERR-INVALID-STATE)))
+      (match (get viewer-sig updated-state)
+        viewer-sig 
+        (match (get creator-sig updated-state)
+          creator-sig
+          (begin
+            ;; Update channel state
+            (map-set channels
+              { channel-id: channel-id }
+              (merge channel {
+                viewer-balance: (get viewer-balance updated-state),
+                creator-balance: (get creator-balance updated-state),
+                nonce: nonce
+              }))
+            (ok true))
+          ERR-INVALID-STATE)
+        ERR-INVALID-STATE))))
