@@ -69,4 +69,47 @@
       (not (is-eq creator tx-sender))
       (not (is-eq creator (as-contract tx-sender)))))
 
-      
+      ;; Public functions
+      (define-public (create-channel (creator principal) (deposit uint))
+        (let
+          ((channel-id (var-get next-channel-id))
+           (sender tx-sender))
+
+          ;; Validate creator principal
+          (asserts! (validate-creator creator) ERR-INVALID-CREATOR)
+
+          ;; Standard checks
+          (asserts! (> deposit u0) ERR-INVALID-AMOUNT)
+          (asserts! (is-none (get-channel channel-id)) ERR-ALREADY-EXISTS)
+          (asserts! (>= (stx-get-balance sender) deposit) ERR-INSUFFICIENT-BALANCE)
+
+          ;; Transfer deposit to contract
+          (try! (stx-transfer? deposit sender (as-contract tx-sender)))
+
+          ;; Create channel
+          (map-set channels
+            { channel-id: channel-id }
+            {
+              viewer: sender,
+              creator: creator,
+              viewer-balance: deposit,
+              creator-balance: u0,
+              total-deposit: deposit,
+              nonce: u0,
+              timeout-height: (+ block-height u1440), ;; 24 hour timeout
+              is-active: true
+            })
+
+          ;; Store initial state
+          (map-set channel-states
+            { channel-id: channel-id, nonce: u0 }
+            {
+              viewer-balance: deposit,
+              creator-balance: u0,
+              viewer-sig: none,
+              creator-sig: none
+            })
+
+          ;; Increment channel ID
+          (var-set next-channel-id (+ channel-id u1))
+          (ok channel-id)))
