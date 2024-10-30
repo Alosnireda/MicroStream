@@ -195,3 +195,74 @@
             (ok true))
           ERR-INVALID-STATE)
         ERR-INVALID-STATE))))
+
+(define-public (close-channel (channel-id uint))
+  (let
+    ((channel (unwrap! (get-channel channel-id) ERR-CHANNEL-NOT-FOUND)))
+
+    ;; Verify channel is active
+    (asserts! (get is-active channel) ERR-CHANNEL-CLOSED)
+
+    ;; Verify caller is participant
+    (asserts! (or
+                (is-eq tx-sender (get viewer channel))
+                (is-eq tx-sender (get creator channel)))
+              ERR-NOT-AUTHORIZED)
+
+    ;; Transfer balances
+    (try! (as-contract 
+      (stx-transfer? (get viewer-balance channel) tx-sender (get viewer channel))))
+    (try! (as-contract 
+      (stx-transfer? (get creator-balance channel) tx-sender (get creator channel))))
+
+    ;; Close channel
+    (map-set channels
+      { channel-id: channel-id }
+      (merge channel { is-active: false }))
+    (ok true)))
+
+(define-public (dispute-channel (channel-id uint))
+  (let
+    ((channel (unwrap! (get-channel channel-id) ERR-CHANNEL-NOT-FOUND)))
+
+    ;; Verify channel is active
+    (asserts! (get is-active channel) ERR-CHANNEL-CLOSED)
+
+    ;; Verify caller is participant
+    (asserts! (or
+                (is-eq tx-sender (get viewer channel))
+                (is-eq tx-sender (get creator channel)))
+              ERR-NOT-AUTHORIZED)
+
+    ;; Set dispute timeout
+    (map-set channels
+      { channel-id: channel-id }
+      (merge channel
+        {
+          timeout-height: (+ block-height u1440) ;; 24 hour dispute period
+        }))
+    (ok true)))
+
+(define-public (settle-disputed-channel (channel-id uint))
+  (let
+    ((channel (unwrap! (get-channel channel-id) ERR-CHANNEL-NOT-FOUND)))
+
+    ;; Verify channel is active
+    (asserts! (get is-active channel) ERR-CHANNEL-CLOSED)
+
+    ;; Verify timeout has passed
+    (asserts! (>= block-height (get timeout-height channel))
+              ERR-INVALID-STATE)
+
+    ;; Transfer balances
+    (try! (as-contract 
+      (stx-transfer? (get viewer-balance channel) tx-sender (get viewer channel))))
+    (try! (as-contract 
+      (stx-transfer? (get creator-balance channel) tx-sender (get creator channel))))
+
+    ;; Close channel
+    (map-set channels
+      { channel-id: channel-id }
+      (merge channel { is-active: false }))
+    (ok true)))
+
